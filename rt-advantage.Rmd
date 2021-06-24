@@ -1,0 +1,443 @@
+---
+title: "Variant R_t advantage"
+author: "Rob Challen"
+date: '`r format(Sys.Date(), "%d-%m-%Y")`'
+output:
+  beamer_presentation:
+    slide_level: 2
+    theme: "Singapore"
+    colortheme: "seagull"
+classoption: "aspectratio=169"
+fontsize: 10pt
+knit: (function(inputFile, encoding,...) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = paste0(here::here("output/",Sys.Date())), output_file=paste0('current-rt-data-',Sys.Date(),'.pdf')) })
+# output: 
+#   ioslides_presentation:
+#     widescreen: true
+#     smaller: true
+#     css: ~/Git/uk-covid-datatools/vignettes/ioslides.css
+#     # self_contained: false
+#     # lib_dir: ~/Dropbox/covid19/current-rt/data/libs
+# knit: (function(inputFile, encoding,...) {
+#   rmarkdown::render(inputFile, encoding = encoding, output_dir = "~/Dropbox/covid19/current-rt/data", output_file=paste0('current-rt-data-',Sys.Date(),'.html')) })
+---
+
+## Authors
+
+Robert Challen ^1,2^;  Krasimira Tsaneva-Atanasova ^1,3,5^; Ellen Brooks-Pollock^4^; Leon Danon ^3,5^
+
+1) EPSRC Centre for Predictive Modelling in Healthcare, University of Exeter, Exeter, Devon, UK.
+2) Taunton and Somerset NHS Foundation Trust, Taunton, Somerset, UK.
+3) The Alan Turing Institute, British Library, 96 Euston Rd, London NW1 2DB, UK.
+4) Bristol Medical School, Population Health Sciences, University of Bristol, Bristol, UK
+5) Data Science Institute, College of Engineering, Mathematics and Physical Sciences, University of Exeter, Exeter, UK. 
+
+Report: `r Sys.Date()`
+
+## 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = TRUE,
+  message = TRUE
+)
+
+here::i_am("in-development/rt-advantage.Rmd")
+source(here::here("common-setup.R"))
+#source(here::here("cron-estimate-rt.R"))## R advantage
+```
+
+# mixture distribution combination
+
+```{r}
+
+# TODO make cdfFn a list 
+pmixture = function(q, cdfFn, ...) {
+  params = rlang::list2(...)
+  cdfs = purrr::pmap(params,function(...) return(function(x) cdfFn(x,...)))
+  tmp = sapply(cdfs, function(z) z(q))
+  if(is.array(tmp)) {
+    tmp = rowMeans(tmp)
+  } else {
+    tmp = mean(tmp)
+  }
+  return(tmp)
+}
+
+# rough test
+# pmixture(c(-1), pnorm, mean=c(0,2,4), sd=c(1,2,3))
+
+
+
+qmixture = function(p, bounds, cdfFn, ... ) {
+  quantGenFn = function(q) return(function(x) pmixture(x, cdfFn, ...)-q)
+  estimates = sapply(p, function(x) tryCatch(uniroot(quantGenFn(x), interval=bounds)$root,error = function(e) NaN))
+  return(tibble(
+    quantile = p,
+    estimate = estimates,
+    method = "ensemble"
+  ))
+}
+
+# 
+# qmixture(c(0.025,0.5,0.975), c(-1000,1000), pnorm, mean=c(0,2,4), sd=c(1,2,3))
+
+#plot(pmixture(seq(-5,5,length.out = 1001), pnorm, mean=c(0,2,4), sd=c(1,2,3)))
+
+```
+
+# Serial intervals
+
+```{r}
+
+serialInterval = SerialIntervalProvider$generationInterval(dpc)
+serialInterval$printSerialInterval()
+dfit = serialInterval$dfit
+dfitGammas = dfit$discreteProbabilities(q=0:14,summarise = FALSE)
+gammaMatrix1 = dfitGammas %>% arrange(bootstrapNumber,value) %>% pull(discreteProbability) %>% matrix(nrow=15,ncol=100)
+
+readr::write_csv(dfit$bootstraps,here::here("output/transmission-advantage/generation-intervals.csv"))
+
+p1 = ggplot(dfitGammas,aes(x=value,y=discreteProbability,group=as.factor(bootstrapNumber)))+geom_line(alpha = 0.2)+ylab("discrete probability")+xlab("day after infection")
+p1 %>% standardPrintOutput::saveThirdPageFigure(here::here("output/transmission-advantage/S0-si-paper-gammas"))
+
+
+```
+
+
+# Background 
+
+```{r}
+
+infectionEpisodes = dpc$spim$getInfectionEpisodes()
+infectionEpisodes = infectionEpisodes %>% rename(specimen_date=earliest_specimen_date)
+infectionEpisodes %>% with(table(asymptomatic_indicator,sGene))
+
+dates = infectionEpisodes %>% group_by(sGene) %>% summarise(minDate = min(specimen_date), maxDate = max(specimen_date)) %>% ungroup() %>% summarise(minDate = max(minDate), maxDate = min(maxDate)-4)
+
+symptomaticTimeseries = infectionEpisodes %>% dpc$spim$getLineListIncidence(ageBreaks = NULL,codeTypes = c("CTRY","NHSER"), subgroup = sGene, filterExpr = asymptomatic_indicator != "Y") %>% 
+  filter(date <= dates$maxDate & date >= dates$minDate) %>%
+  dpc$demog$findDemographics() %>%
+  tsp$completeAndRemoveAnomalies()
+
+J = jepidemic::JavaApi$new()
+
+estim = J$CoriEstimator$new(r0Mean = 5,r0SD = 3,maxWindow = 14)
+#estim$selectAdaptiveWindow(incidenceSum = 300,minWindow = 7)
+estim$selectSpecificWindow(14)
+estim$withAdaptivePrior(factor = 1.1)
+estim$withInfectivityProfileMatrix(gammaMatrix1)
+estim$inMiddleOfTimeseries()
+estim$detailedOutput()
+
+symptomaticRtBootstraps = estim$estimateRt(incidence = symptomaticTimeseries %>% ukcovidtools::covidStandardGrouping(), dateColName = "date",incidenceColName = "value.original")
+# TODO: investigate factor mapping error fix
+# symptomaticRtBootstraps14 = symptomaticRtBootstraps %>% filter(Rt.Window == 14)
+
+estim$collectMixtureQuantiles()
+symptomaticRt = estim$estimateRt(incidence = symptomaticTimeseries %>% ukcovidtools::covidStandardGrouping(), dateColName = "date",incidenceColName = "value.original")
+symptomaticRt$`Anomaly.R` = symptomaticTimeseries$Anomaly
+
+p1 = tsp$plotRt(symptomaticRt %>% filter(subgroup %in% c("Positive","Negative") & name!="Unknown (England)"), colour = subgroup, dates = "2020-10-01",rtlim = c(0,2.5), ribbons = TRUE)+facet_wrap(vars(name),ncol=4)+scale_color_discrete()+standardPrintOutput::narrowAndTall() + standardPrintOutput::smallLegend()
+
+p1 %>%  standardPrintOutput::saveThirdPageFigure(here::here("output/transmission-advantage/S2-reproduction-number"))
+
+
+p2 = tsp$plotIncidenceQuantiles(symptomaticTimeseries %>% filter(name!="Unknown (England)"), colour = subgroup, dates = "2020-10-01")+facet_wrap(vars(name),ncol=4)+scale_color_discrete()+standardPrintOutput::narrowAndTall() + standardPrintOutput::smallLegend()+scale_y_continuous(trans="log1p", breaks = ukcovidtools::breaks_log1p())
+
+p2  %>%  standardPrintOutput::saveThirdPageFigure(here::here("output/transmission-advantage/S1-incidence"))
+```
+
+# Beta prime mixture methods
+
+```{r}
+gammaParamters = 
+  symptomaticRtBootstraps %>% filter(subgroup == "Positive") %>% select(code,name,date,Rt.ProfileId,posShape = Rt.Shape, posScale = Rt.Scale) %>%
+  left_join(
+    symptomaticRtBootstraps %>% filter(subgroup == "Negative") %>% select(code,name,date,Rt.ProfileId,negShape = Rt.Shape, negScale = Rt.Scale),
+    by=c("code","name","date","Rt.ProfileId")
+  )
+
+rtRatio2 = gammaParamters %>% 
+  group_by(code,name,date) %>%
+  filter(!is.na(posShape) & !is.na(negShape) & !is.na(posScale) & !is.na(negScale) & negScale > 0) %>%
+  group_modify(function(d,g,...) {
+    return(qmixture(c(0.025,0.5,0.975), c(-1000,1000), extraDistr::pbetapr, shape1=d$posShape, shape2=d$negShape, scale = d$posScale/d$negScale))
+  })
+
+rtRatio2b = gammaParamters %>% 
+  group_by(code,name,date) %>%
+  filter(!is.na(posShape) & !is.na(negShape) & !is.na(posScale) & !is.na(negScale) & posScale > 0) %>%
+  # mutate(
+  #   ratio.median = extraDistr::qbetapr(p=0.5,posShape,negShape,posScale/negScale),
+  #   ratio.q.025 = extraDistr::qbetapr(p=0.025,posShape,negShape,posScale/negScale),
+  #   ratio.q.975 = extraDistr::qbetapr(p=0.975,posShape,negShape,posScale/negScale),
+  #   ratio.mean = posMean/negMean
+  # )
+  group_modify(function(d,g,...) {
+    return(qmixture(c(0.025,0.5,0.975), c(-1000,1000), extraDistr::pbetapr, shape1=d$negShape, shape2=d$posShape, scale = d$negScale/d$posScale))
+  })
+
+
+rtRatio3 = bind_rows(
+  rtRatio2 %>% pivot_wider(names_from = quantile, values_from = estimate, names_prefix="q.") %>% mutate(advantage="S+ over S-"),
+  rtRatio2b %>% pivot_wider(names_from = quantile, values_from = estimate, names_prefix="q.") %>% mutate(advantage="S- over S+")
+)
+
+# ggplot(rtRatio3, aes(x=date,y=q.0.5, ymin = q.0.025, ymax = q.0.975)) + geom_ribbon(aes(fill=advantage),alpha=0.4,colour=NA) + geom_line(aes(colour=advantage)) +
+#   geom_hline(yintercept=1) +
+#   facet_wrap(vars(name))+
+#   coord_cartesian(ylim=c(0,2.5))
+  
+```
+
+# Full bootstrap method
+
+```{r}
+## Sensitivity analysis
+# TODO: serial interval matrix for gammas with various means with constant shape parameter
+# calculate R_t for Spos and Sneg and get detailed output / don't combine bootstraps. 
+# 
+
+# psi = ParametricSerialIntervalProvider$new(dpc, "gamma", tibble(param = c("mean","sd"), mean=c(4.2,4.9), sd=c(NA,NA), lower=c(NA,NA), upper=c(NA,NA)))
+gammaSamples = 
+  symptomaticRtBootstraps %>% filter(subgroup == "Positive") %>% select(code,name,date,Rt.ProfileId,posShape = Rt.Shape, posScale = Rt.Scale) %>%
+  left_join(
+    symptomaticRtBootstraps %>% filter(subgroup == "Negative") %>% select(code,name,date,Rt.ProfileId,negShape = Rt.Shape, negScale = Rt.Scale),
+    by=c("code","name","date","Rt.ProfileId")
+  ) %>%
+  group_by(code,name,date,Rt.ProfileId) %>%
+  filter(!is.na(posShape) & !is.na(negShape) & !is.na(posScale) & !is.na(negScale) & negScale > 0 & posScale > 0) %>%
+  group_modify(function(d,g,...) {
+    posRt = rgamma(10,shape=d$posShape,scale=d$posScale)
+    negRt = rgamma(10,shape=d$negShape,scale=d$negScale)
+    ratios = posRt/negRt
+    bind_rows(
+      tibble(
+        ratios = ratios,
+        advantage="S+ over S-"
+      ),
+      tibble(
+        ratios = 1/ratios,
+        advantage="S- over S+"
+      )
+    )
+  }) 
+
+gammaParamters2 = gammaSamples %>% 
+  group_by(code,name,date,advantage) %>%
+  summarise(
+    q.0.025 = unname(quantile(ratios,0.025)),
+    q.0.5 = unname(quantile(ratios,0.5)),
+    q.0.975 = unname(quantile(ratios,0.975))
+  ) 
+
+# ggplot(gammaParamters2, aes(x=date,y=ratio.median, ymin = ratio.q.025, ymax = ratio.q.975)) + 
+#   geom_ribbon(aes(fill=advantage),alpha=0.4,colour=NA) + 
+#   geom_line(aes(colour=advantage)) +
+#   geom_hline(yintercept=1) +
+#   facet_wrap(vars(name))+
+#   coord_cartesian(ylim=c(0,2.5))
+
+sensitivityCombination = bind_rows(
+  gammaParamters2 %>% mutate(method = "full bootstrap"),
+  rtRatio3 %>% mutate(method = "gamma ratio")
+)
+
+p1 = ggplot(sensitivityCombination %>% filter(name!="Unknown (England)" & advantage=="S+ over S-" & date > "2020-10-01"), 
+       aes(x=date,y=q.0.5, ymin = q.0.025, ymax = q.0.975)) + 
+  geom_ribbon(aes(colour=method),fill=NA,linetype="dotted") + geom_line(aes(colour=method)) +
+  geom_hline(yintercept=1) +
+  facet_wrap(vars(name,method),ncol=4)+
+  ylab(latex2exp::TeX("$R_t$ ratio"))+
+  coord_cartesian(ylim=c(0,2.5)) +
+  standardPrintOutput::narrower() +
+  standardPrintOutput::smallLegend()
+
+p1 %>%  standardPrintOutput::saveTwoThirdPageFigure(here::here("output/transmission-advantage/S3-methods-comparison"))
+
+```
+
+# Combination of timeseries and time aggregated R_t advantage
+
+
+```{r}
+
+b117dates = as.Date(c("2020-12-01","2021-02-01"))
+b16172dates = as.Date(c("2021-05-01","2021-06-01"))
+
+rtRatioFromMay = gammaParamters %>% 
+  filter(date>b16172dates[1] & date<b16172dates[2]) %>%
+  group_by(code,name) %>%
+  filter(!is.na(posShape) & !is.na(negShape) & !is.na(posScale) & !is.na(negScale) & posScale > 0) %>%
+  # mutate(
+  #   ratio.median = extraDistr::qbetapr(p=0.5,posShape,negShape,posScale/negScale),
+  #   ratio.q.025 = extraDistr::qbetapr(p=0.025,posShape,negShape,posScale/negScale),
+  #   ratio.q.975 = extraDistr::qbetapr(p=0.975,posShape,negShape,posScale/negScale),
+  #   ratio.mean = posMean/negMean
+  # )
+  group_modify(function(d,g,...) {
+    return(qmixture(c(0.025,0.5,0.975), c(-1000,1000), extraDistr::pbetapr, shape1=d$posShape, shape2=d$negShape, scale = d$posScale/d$negScale))
+  }) %>%
+  pivot_wider(names_from = quantile, values_from = estimate, names_prefix="q.") %>% mutate(advantage="B.1.617.2 over B.1.1.7") %>%
+  mutate(minDate = b16172dates[1],maxDate = b16172dates[2])
+
+rtRatioJanToMarch = gammaParamters %>% 
+  filter(date>b117dates[1] & date<b117dates[2]) %>%
+  group_by(code,name) %>%
+  filter(!is.na(posShape) & !is.na(negShape) & !is.na(posScale) & !is.na(negScale) & posScale > 0) %>%
+  # mutate(
+  #   ratio.median = extraDistr::qbetapr(p=0.5,posShape,negShape,posScale/negScale),
+  #   ratio.q.025 = extraDistr::qbetapr(p=0.025,posShape,negShape,posScale/negScale),
+  #   ratio.q.975 = extraDistr::qbetapr(p=0.975,posShape,negShape,posScale/negScale),
+  #   ratio.mean = posMean/negMean
+  # )
+  group_modify(function(d,g,...) {
+    return(qmixture(c(0.025,0.5,0.975), c(-1000,1000), extraDistr::pbetapr, shape1=d$negShape, shape2=d$posShape, scale = d$negScale/d$posScale))
+  }) %>%
+  pivot_wider(names_from = quantile, values_from = estimate, names_prefix="q.") %>% mutate(advantage="B.1.1.7 over wild-type") %>%
+  mutate(minDate = b117dates[1],maxDate = b117dates[2])
+```
+
+# Table of estimates
+
+```{r}
+rtRatioFromMay %>% bind_rows(rtRatioJanToMarch) %>%
+  mutate(value = sprintf("%1.2f (%1.2f \u2014 %1.2f)", q.0.5, q.0.025, q.0.975)) %>%
+  filter(name != "Unknown (England)") %>% 
+  ungroup() %>%
+  select(name,advantage,value) %>%
+  pivot_wider(names_from = advantage, values_from=value) %>%
+  standardPrintOutput::saveTable(here::here("output/transmission-advantage/T1-advantage-estimate"))
+```
+
+# Figure 1 transmission advantage
+
+```{r}
+avgAdv = bind_rows(
+  rtRatioFromMay, 
+  rtRatioJanToMarch
+) %>% filter(name != "Unknown (England)")
+  
+p1 = ggplot(rtRatio3 %>% filter(name != "Unknown (England)"), aes(x=date,y=q.0.5, ymin = q.0.025, ymax = q.0.975)) + 
+  geom_ribbon(aes(fill=advantage),alpha=0.4,colour=NA) + 
+  geom_line(aes(colour=advantage)) +
+  geom_rect(data=avgAdv, mapping=aes(xmin=minDate,xmax=maxDate,ymin = q.0.025, ymax = q.0.975,fill=advantage),inherit.aes = FALSE,alpha=0.3)+
+  geom_segment(data=avgAdv, mapping=aes(x=minDate,xend=maxDate,y = q.0.5, yend = q.0.5,colour=advantage), inherit.aes = FALSE)+
+  geom_hline(yintercept=1) +
+  facet_wrap(vars(name),ncol=4)+
+  coord_cartesian(ylim=c(0,2.5),xlim=as.Date(c("2020-10-01",NA)))+
+  standardPrintOutput::narrowAndTall()+
+  standardPrintOutput::smallLegend()+
+  ylab(latex2exp::TeX("$R_t$ ratio"))+
+  xlab(NULL)+
+  scale_x_date(date_breaks = "2 month",date_labels = "%m-%y")
+
+p1 %>% standardPrintOutput::saveThirdPageFigure(here::here("output/transmission-advantage/Fig1-advantage-timeseries"))
+
+```
+
+# generation time distributions
+
+
+```{r}
+
+tmp = SerialIntervalProvider$generationInterval(dpc)
+tmp$dfit$printDistributionDetail()
+shape = tmp$dfit$printDistributionDetail() %>% filter(param=="shape") %>% pull(mean)
+mean = tmp$dfit$printDistributionDetail() %>% filter(param=="mean") %>% pull(mean)
+
+
+gammas = bind_rows(
+  lapply(seq(2,7,length.out = 100), function(mean) {
+    rate = shape/mean
+    cdf = pgamma(0:14, shape, rate)
+    dpdf = cdf-lag(cdf,default=0)
+    return(tibble(mean=mean,day=0:14,pdf = dpdf))
+  })
+) %>% arrange(mean,day)
+
+gammaMatrix = gammas %>% arrange(mean,day) %>% pull(pdf) %>% matrix(nrow=15,ncol=100)
+profiles = tibble(
+  Rt.ProfileId = 0:99,
+  gammaMean = gammas$mean %>% unique()
+)
+  
+
+p1 = ggplot(gammas,aes(x=day,y=pdf,colour=as.factor(mean)))+geom_line()+scale_color_discrete(guide="none")+ylab("discrete probability")+xlab("day after infection")
+p1 %>% standardPrintOutput::saveThirdPageFigure(here::here("output/transmission-advantage/S4-explored-gammas"))
+```
+
+# Ratio estimates generation time combinations
+
+```{r}
+estim2 = J$CoriEstimator$new(r0Mean = 5,r0SD = 5,maxWindow = 14)
+estim2$selectSpecificWindow(14)
+estim2$withAdaptivePrior(factor = 1.1)
+estim2$detailedOutput()
+estim2$withInfectivityProfileMatrix(gammaMatrix)
+
+spos = estim2$estimateRt(incidence = symptomaticTimeseries %>% filter(subgroup=="Positive") %>% covidStandardGrouping(), incidenceColName = "value.original", dateColName = "date")
+sneg = estim2$estimateRt(incidence = symptomaticTimeseries %>% filter(subgroup=="Negative") %>% covidStandardGrouping(), incidenceColName = "value.original", dateColName = "date")
+
+# filter down to B.1.617.2 emergence dates
+spos2 = spos %>% filter(date>b16172dates[1] & date<b16172dates[2]) %>% ungroup() %>% select(code,name,date,Rt.ProfileId,posShape = Rt.Shape, posScale = Rt.Scale) %>% inner_join(profiles, by="Rt.ProfileId") %>% rename(posGammaMean = gammaMean)
+
+sneg2 = sneg %>% filter(date>b16172dates[1] & date<b16172dates[2]) %>% ungroup() %>% select(code,name,date,Rt.ProfileId,negShape = Rt.Shape, negScale = Rt.Scale) %>% inner_join(profiles, by="Rt.ProfileId") %>% rename(negGammaMean = gammaMean)
+
+sposVsneg = spos2 %>% inner_join( sneg2, by=c("code","name","date"), suffix=c(".pos",".neg"))
+
+sposAdvantage = sposVsneg %>% group_by(code,name,Rt.ProfileId.pos,Rt.ProfileId.neg,posGammaMean,negGammaMean) %>%
+  group_modify(function(d,g,...) {
+    return(qmixture(c(0.025,0.5,0.975), c(-1000,1000), extraDistr::pbetapr, shape1=d$posShape, shape2=d$negShape, scale = d$posScale/d$negScale))
+  }) %>%
+  pivot_wider(names_from = quantile, values_from = estimate, names_prefix="q.") %>% mutate(advantage="B.1.617.2 over B.1.1.7")
+
+saveRDS(sposAdvantage, here::here("output/transmission-advantage/spos-advantage.RData"))
+```
+
+```{r}
+p1 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=negGammaMean))+
+  geom_contour(aes(z=q.0.5),binwidth = 0.05)+
+  geom_contour(aes(z=q.0.5),breaks = c(1.25,1.5,1.75,2.25,2.5,2.75),colour="magenta")+
+  geom_contour(aes(z=q.0.5),breaks = c(1,2,3),colour="red")+
+  metR::geom_text_contour(aes(z=q.0.5), stroke = 0.2,binwidth = 0.25)+
+  coord_fixed()+
+  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50", fill=NA,size=0.5,linetype="dashed")
+
+p2 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=negGammaMean))+
+  geom_contour(aes(z=q.0.025),binwidth = 0.05)+
+  geom_contour(aes(z=q.0.025),breaks = c(1.25,1.5,1.75,2.25,2.5,2.75),colour="magenta")+
+  geom_contour(aes(z=q.0.025),breaks = c(1,2,3),colour="red")+
+  metR::geom_text_contour(aes(z=q.0.025), stroke = 0.2,binwidth = 0.25)+
+  coord_fixed()+
+  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50",fill=NA,size=0.5,linetype="dashed")
+
+p3 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=negGammaMean))+
+  geom_contour(aes(z=q.0.975),binwidth = 0.05)+
+  geom_contour(aes(z=q.0.975),breaks = c(1.25,1.5,1.75,2.25,2.5,2.75),colour="magenta")+
+  geom_contour(aes(z=q.0.975),breaks = c(1,2,3),colour="red")+
+  metR::geom_text_contour(aes(z=q.0.975), stroke = 0.2,binwidth = 0.25)+
+  coord_fixed()+
+  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50",fill=NA,size=0.5,linetype="dashed")
+
+p4 = (p1+xlab("S+ mean GT (days)")+ylab("S- mean GT (days)")|((p2+xlab(NULL)+ylab(NULL))/(p3+xlab(NULL)+ylab(NULL))))+patchwork::plot_layout(widths=c(1,0.5))+patchwork::plot_annotation(tag_levels = "A")
+
+p4 %>% standardPrintOutput::saveHalfPageFigure(here::here("output/transmission-advantage/by-generation-time-ENG"))
+
+```
+
+```{r}
+p5 = ggplot(sposAdvantage %>% filter(!name %in% c("Unknown (England)","England")), aes(x=posGammaMean, y=negGammaMean))+
+  geom_contour(aes(z=q.0.5),binwidth = 0.05)+
+  geom_contour(aes(z=q.0.5),breaks = c(1.25,1.5,1.75,2.25,2.5,2.75),colour="magenta")+
+  geom_contour(aes(z=q.0.5),breaks = c(1,2,3),colour="red")+
+  metR::geom_text_contour(aes(z=q.0.5), stroke = 0.2,binwidth = 0.25)+
+  coord_fixed()+facet_wrap(vars(name),ncol=4)+xlab("S+ mean GI (days)")+ylab("S- mean GI (days)")+
+  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50",fill=NA,size=0.5,linetype="dashed")
+
+p5 %>% standardPrintOutput::saveHalfPageFigure(here::here("output/transmission-advantage/by-generation-time-NHSER-no-CI"))
+
+```
+
