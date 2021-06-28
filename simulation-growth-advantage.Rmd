@@ -1,0 +1,108 @@
+---
+title: "Simulated R_t advantage"
+author: "Rob Challen"
+date: '`r format(Sys.Date(), "%d-%m-%Y")`'
+output:
+  beamer_presentation:
+    slide_level: 2
+    theme: "Singapore"
+    colortheme: "seagull"
+classoption: "aspectratio=169"
+fontsize: 10pt
+knit: (function(inputFile, encoding,...) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = paste0(here::here("output/",Sys.Date())), output_file=paste0('current-rt-data-',Sys.Date(),'.pdf')) })
+# output: 
+#   ioslides_presentation:
+#     widescreen: true
+#     smaller: true
+#     css: ~/Git/uk-covid-datatools/vignettes/ioslides.css
+#     # self_contained: false
+#     # lib_dir: ~/Dropbox/covid19/current-rt/data/libs
+# knit: (function(inputFile, encoding,...) {
+#   rmarkdown::render(inputFile, encoding = encoding, output_dir = "~/Dropbox/covid19/current-rt/data", output_file=paste0('current-rt-data-',Sys.Date(),'.html')) })
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = TRUE,
+  message = TRUE
+)
+
+here::i_am("rt-advantage.Rmd")
+source(here::here("common-setup.R"))
+#source(here::here("cron-estimate-rt.R"))## R advantage
+```
+
+Assume a gamma dis
+
+$$
+
+\alpha = shape \\
+\beta = rate \\
+
+G \sim \Gamma(\alpha,\beta) \\
+
+\bar{G} = E(G) = \alpha/\beta \\
+V(G) = \alpha/\beta^2 \\
+
+\kappa = 1/\alpha \\
+
+V(G) = \kappa \bar{G}^2 \\
+
+R = (1+r\kappa \bar{G} )^{1/\kappa} \\
+R = \Big(1+\frac{r\bar{G}}{\alpha}\Big)^\alpha \\
+
+$$ 
+
+## Transmission advantage $T$ of strain 1 over strain 2:
+
+$$
+
+T_{1>2} = \frac{R_1}{R_2} \\
+ 
+T_{1>2} = \frac{\Big(1+\frac{r_1\bar{G_1}}{\alpha_1}\Big)^{\alpha_1} \\}{\Big(1+\frac{r_2\bar{G_2}}{\alpha_2}\Big)^{\alpha_2} \\}
+ 
+$$
+
+assuming $\alpha_1 = \alpha_2$ is unchanged between variants:
+
+$$
+
+T_{1>2} = \Big(\frac{\alpha+r_1\bar{G_1}}{\alpha+r_2\bar{G_2}}\Big)^\alpha 
+ 
+$$
+assume $r_1 = 0.1$ and $r_2 = -0.05$
+
+```{r}
+library(tidyverse)
+
+shape = 9.894052
+
+advantage = function(meanG1, meanG2, growth1, growth2,shape1,shape2) {
+  return( (1+growth1*meanG1/shape1)^shape1 / (1+growth2*meanG2/shape2)^shape2 )
+}
+
+sim = tidyr::crossing(
+  tibble(meanG1 = seq(2,7,length.out = 100)),
+  tibble(meanG2 = seq(2,7,length.out = 100)),
+  tibble(growth1 = seq(0.06,0.12,length.out = 4)),
+  tibble(growth2 = seq(-0.05,0.01,length.out = 4)),
+)
+sim = sim %>% mutate(adv = advantage(meanG1, meanG2, growth1, growth2, shape, shape))
+
+library(grid)
+
+ggplot(sim %>% mutate(g2lab = round(growth2,digits = 2),g1lab = round(growth1,digits = 2)), aes(x=meanG1, y=meanG2))+
+  geom_abline(colour="grey50")+
+  geom_contour(aes(z=adv),binwidth = 0.05)+
+  geom_contour(aes(z=adv),breaks = c(1.25,1.5,1.75,2.25,2.5,2.75),colour="magenta")+
+  geom_contour(aes(z=adv),breaks = c(1,2,3),colour="red")+
+  metR::geom_text_contour(aes(z=adv), stroke = 0.2,binwidth = 0.25)+
+  coord_fixed()+
+  facet_grid(g1lab~g2lab)+
+  xlab("disadvantaged variant: mean GT (days) and growth rate")+
+  ylab("advantaged variant: mean GT (days) and growth rate")
+
+```

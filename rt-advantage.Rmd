@@ -43,7 +43,7 @@ knitr::opts_chunk$set(
   message = TRUE
 )
 
-here::i_am("in-development/rt-advantage.Rmd")
+here::i_am("rt-advantage.Rmd")
 source(here::here("common-setup.R"))
 #source(here::here("cron-estimate-rt.R"))## R advantage
 ```
@@ -398,13 +398,17 @@ saveRDS(sposAdvantage, here::here("output/transmission-advantage/spos-advantage.
 ```
 
 ```{r}
+points = dfit$bootstraps %>% select(param,value) %>% pivot_wider(names_from = param,values_from=value) %>% mutate( mean = shape / rate)
+
 p1 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=negGammaMean))+
   geom_contour(aes(z=q.0.5),binwidth = 0.05)+
   geom_contour(aes(z=q.0.5),breaks = c(1.25,1.5,1.75,2.25,2.5,2.75),colour="magenta")+
   geom_contour(aes(z=q.0.5),breaks = c(1,2,3),colour="red")+
   metR::geom_text_contour(aes(z=q.0.5), stroke = 0.2,binwidth = 0.25)+
   coord_fixed()+
-  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50", fill=NA,size=0.5,linetype="dashed")
+  # geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50", fill=NA,size=0.5,linetype="dashed")
+  # geom_segment(x=4.31, xend=5.40,y=4.31, yend=5.40,colour="green", size=1)
+  geom_point(data = points, aes(x=mean,y=mean),size=1,alpha=0.2,inherit.aes = FALSE)
 
 p2 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=negGammaMean))+
   geom_contour(aes(z=q.0.025),binwidth = 0.05)+
@@ -412,7 +416,9 @@ p2 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=neg
   geom_contour(aes(z=q.0.025),breaks = c(1,2,3),colour="red")+
   metR::geom_text_contour(aes(z=q.0.025), stroke = 0.2,binwidth = 0.25)+
   coord_fixed()+
-  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50",fill=NA,size=0.5,linetype="dashed")
+  # geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50", fill=NA,size=0.5,linetype="dashed")
+  # geom_segment(x=4.31, xend=5.40,y=4.31, yend=5.40,colour="green", size=1)
+  geom_point(data = points, aes(x=mean,y=mean),size=1,alpha=0.2,inherit.aes = FALSE)
 
 p3 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=negGammaMean))+
   geom_contour(aes(z=q.0.975),binwidth = 0.05)+
@@ -420,7 +426,9 @@ p3 = ggplot(sposAdvantage %>% filter(name=="England"), aes(x=posGammaMean, y=neg
   geom_contour(aes(z=q.0.975),breaks = c(1,2,3),colour="red")+
   metR::geom_text_contour(aes(z=q.0.975), stroke = 0.2,binwidth = 0.25)+
   coord_fixed()+
-  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50",fill=NA,size=0.5,linetype="dashed")
+  # geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50", fill=NA,size=0.5,linetype="dashed")
+  # geom_segment(x=4.31, xend=5.40,y=4.31, yend=5.40,colour="green", size=1)
+  geom_point(data = points, aes(x=mean,y=mean),size=1,alpha=0.2,inherit.aes = FALSE)
 
 p4 = (p1+xlab("S+ mean GT (days)")+ylab("S- mean GT (days)")|((p2+xlab(NULL)+ylab(NULL))/(p3+xlab(NULL)+ylab(NULL))))+patchwork::plot_layout(widths=c(1,0.5))+patchwork::plot_annotation(tag_levels = "A")
 
@@ -435,7 +443,9 @@ p5 = ggplot(sposAdvantage %>% filter(!name %in% c("Unknown (England)","England")
   geom_contour(aes(z=q.0.5),breaks = c(1,2,3),colour="red")+
   metR::geom_text_contour(aes(z=q.0.5), stroke = 0.2,binwidth = 0.25)+
   coord_fixed()+facet_wrap(vars(name),ncol=4)+xlab("S+ mean GI (days)")+ylab("S- mean GI (days)")+
-  geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50",fill=NA,size=0.5,linetype="dashed")
+  # geom_rect(xmin=4.31, xmax=5.40,ymin=4.31, ymax=5.40,colour="grey50", fill=NA,size=0.5,linetype="dashed")
+  # geom_segment(x=4.31, xend=5.40,y=4.31, yend=5.40,colour="green", size=1)
+  geom_point(data = points, aes(x=mean,y=mean),size=1,alpha=0.2,inherit.aes = FALSE)
 
 p5 %>% standardPrintOutput::saveHalfPageFigure(here::here("output/transmission-advantage/by-generation-time-NHSER-no-CI"))
 
