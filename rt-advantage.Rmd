@@ -121,7 +121,7 @@ symptomaticTimeseries = infectionEpisodes %>% dpc$spim$getLineListIncidence(ageB
   dpc$demog$findDemographics() %>%
   tsp$completeAndRemoveAnomalies()
 
-J = jepidemic::JavaApi$new()
+J = jepidemic::JavaApi$get()
 
 estim = J$CoriEstimator$new(r0Mean = 5,r0SD = 3,maxWindow = 14)
 #estim$selectAdaptiveWindow(incidenceSum = 300,minWindow = 7)

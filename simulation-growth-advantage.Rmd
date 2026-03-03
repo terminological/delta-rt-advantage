@@ -45,11 +45,13 @@ $$
 G \sim \Gamma(\alpha,\beta) \\
 
 \bar{G} = E(G) = \alpha/\beta \\
-V(G) = \alpha/\beta^2 \\
+\bar{S}^2 = V(G) = \alpha/\beta^2 \\
+\alpha = \frac{\bar{G}^2}{\bar{S}^2} \\
+
 
 \kappa = 1/\alpha \\
 
-V(G) = \kappa \bar{G}^2 \\
+\bar{S}^2 = V(G) = \kappa \bar{G}^2 \\
 
 R = (1+r\kappa \bar{G} )^{1/\kappa} \\
 R = \Big(1+\frac{r\bar{G}}{\alpha}\Big)^\alpha \\
@@ -70,8 +72,10 @@ assuming $\alpha_1 = \alpha_2$ is unchanged between variants:
 
 $$
 
-T_{1>2} = \Big(\frac{\alpha+r_1\bar{G_1}}{\alpha+r_2\bar{G_2}}\Big)^\alpha 
- 
+T_{1>2} = \Big(\frac{\alpha+r_1\bar{G_1}}{\alpha+r_2\bar{G_2}}\Big)^\alpha \\
+
+
+
 $$
 assume $r_1 = 0.1$ and $r_2 = -0.05$
 
@@ -106,3 +110,15 @@ ggplot(sim %>% mutate(g2lab = round(growth2,digits = 2),g1lab = round(growth1,di
   ylab("advantaged variant: mean GT (days) and growth rate")
 
 ```
+
+Assume $G_1 = G_2$:
+
+$$
+
+T_{1>2} = \Big(\frac{\frac{\bar{G}^2}{\bar{S}^2}+r_1\bar{G}}{\frac{\bar{G}^2}{\bar{S}^2}+r_2\bar{G}}\Big)^{\frac{\bar{G}^2}{\bar{S}^2}} \\
+
+T_{1>2} = \Big(\frac{\bar{G}+r_1\bar{S}^2}{\bar{G}+r_2\bar{S}^2}\Big)^{\frac{\bar{G}^2}{\bar{S}^2}}
+
+$$
+
+
